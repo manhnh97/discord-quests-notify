@@ -10,7 +10,7 @@ import os
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple, Any
 
 import discord
@@ -27,7 +27,8 @@ TOKEN_JWT: str = os.getenv('TOKEN_JWT', '')
 WEBHOOK_URL: str = os.getenv('WEBHOOK_URL', '')
 
 # File paths
-SEEN_QUESTS_FILE: str = "seen_quests.json"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SEEN_QUESTS_FILE: str = os.path.join(SCRIPT_DIR, "seen_quests.json")
 
 # API configuration
 DISCORD_API_BASE_URL: str = "https://discord.com/api/v10"
@@ -95,27 +96,39 @@ logger = setup_logging()
 
 def load_seen_quests() -> Set[str]:
     """
-    Load the list of seen quest IDs from file.
+    Load the list of seen quest IDs from file and clean up old entries.
     
     Returns:
-        Set[str]: Set of quest IDs that have been seen before.
+        Set[str]: Set of quest IDs that have been seen before (excluding old ones).
     """
     try:
+        logger.debug(f"Looking for seen quests file at: {SEEN_QUESTS_FILE}")
         if os.path.exists(SEEN_QUESTS_FILE):
             with open(SEEN_QUESTS_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 
-                # Handle both old format (list) and new format (dict)
+                # Handle different formats
                 if isinstance(data, list):
                     # Old format: direct list of quest IDs
                     logger.warning("Detected old format in seen_quests.json, migrating to new format")
                     seen_quests = set(data)
-                    # Save in new format
-                    save_seen_quests(seen_quests)
+                    # Save in new format with current datetime
+                    save_seen_quests_with_datetime(seen_quests)
                     return seen_quests
                 elif isinstance(data, dict):
-                    # New format: dictionary with 'seen_quests' key
-                    return set(data.get('seen_quests', []))
+                    # New format: dictionary with quest data
+                    if 'seen_quests' in data and isinstance(data['seen_quests'], list):
+                        # Old new format: list of quest IDs
+                        logger.warning("Detected old new format, migrating to datetime format")
+                        seen_quests = set(data['seen_quests'])
+                        save_seen_quests_with_datetime(seen_quests)
+                        return seen_quests
+                    elif 'quests' in data:
+                        # New format: dictionary with quest data including datetime
+                        return _load_and_cleanup_quests(data)
+                    else:
+                        logger.error(f"Unexpected data format in {SEEN_QUESTS_FILE}")
+                        return set()
                 else:
                     logger.error(f"Unexpected data format in {SEEN_QUESTS_FILE}")
                     return set()
@@ -124,23 +137,94 @@ def load_seen_quests() -> Set[str]:
         logger.error(f"Error loading seen quests: {str(e)}")
         return set()
 
-def save_seen_quests(seen_quests: Set[str]) -> None:
+def _load_and_cleanup_quests(data: Dict[str, Any]) -> Set[str]:
     """
-    Save the list of seen quest IDs to file.
+    Load quests from new format and clean up old entries.
+    
+    Args:
+        data: Dictionary containing quest data.
+        
+    Returns:
+        Set of quest IDs that are not older than 6 months (180 days).
+    """
+    current_time = datetime.now()
+    cutoff_date = current_time - timedelta(days=180)
+    
+    quests = data.get('quests', {})
+    valid_quest_ids = set()
+    removed_count = 0
+    
+    for quest_id, quest_data in quests.items():
+        try:
+            # Parse the datetime string
+            seen_date = datetime.fromisoformat(quest_data['seen_at'].replace('Z', '+00:00'))
+            
+            # Check if quest is older than 6 months (180 days)
+            if seen_date < cutoff_date:
+                removed_count += 1
+                logger.debug(f"Removing old quest ID: {quest_id} (seen: {seen_date.isoformat()})")
+            else:
+                valid_quest_ids.add(quest_id)
+        except (KeyError, ValueError) as e:
+            logger.warning(f"Invalid quest data for ID {quest_id}: {str(e)}")
+            # Keep quest if we can't parse the date
+            valid_quest_ids.add(quest_id)
+    
+    if removed_count > 0:
+        logger.info(f"Cleaned up {removed_count} old quest entries (older than 6 months)")
+        # Save the cleaned data
+        _save_quests_with_datetime(valid_quest_ids, quests)
+    
+    return valid_quest_ids
+
+def _save_quests_with_datetime(quest_ids: Set[str], existing_quests: Optional[Dict[str, Any]] = None) -> None:
+    """
+    Save quest IDs with datetime tracking.
+    
+    Args:
+        quest_ids: Set of quest IDs to save.
+        existing_quests: Optional existing quest data to preserve.
+    """
+    try:
+        current_time = datetime.now()
+        quests_data = existing_quests or {}
+        
+        # Update or add new quest IDs with current datetime
+        for quest_id in quest_ids:
+            if quest_id not in quests_data:
+                quests_data[quest_id] = {
+                    'seen_at': current_time.isoformat(),
+                    'quest_id': quest_id
+                }
+        
+        data = {
+            'quests': quests_data,
+            'last_updated': current_time.isoformat()
+        }
+        
+        with open(SEEN_QUESTS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        logger.debug(f"Saved {len(quest_ids)} seen quests to file with datetime tracking")
+    except Exception as e:
+        logger.error(f"Error saving seen quests with datetime: {str(e)}")
+
+def save_seen_quests_with_datetime(seen_quests: Set[str]) -> None:
+    """
+    Save the list of seen quest IDs to file with datetime tracking.
     
     Args:
         seen_quests: Set of quest IDs to save.
     """
-    try:
-        data = {
-            'seen_quests': list(seen_quests),
-            'last_updated': datetime.now().isoformat()
-        }
-        with open(SEEN_QUESTS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        logger.debug(f"Saved {len(seen_quests)} seen quests to file")
-    except Exception as e:
-        logger.error(f"Error saving seen quests: {str(e)}")
+    _save_quests_with_datetime(seen_quests)
+
+def save_seen_quests(seen_quests: Set[str]) -> None:
+    """
+    Save the list of seen quest IDs to file (legacy function for compatibility).
+    
+    Args:
+        seen_quests: Set of quest IDs to save.
+    """
+    save_seen_quests_with_datetime(seen_quests)
 
 def add_seen_quest(quest_id: str, seen_quests: Set[str]) -> None:
     """
@@ -151,7 +235,7 @@ def add_seen_quest(quest_id: str, seen_quests: Set[str]) -> None:
         seen_quests: The set of seen quest IDs to update.
     """
     seen_quests.add(quest_id)
-    save_seen_quests(seen_quests)
+    save_seen_quests_with_datetime(seen_quests)
 
 def get_new_quests(quests_data: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Set[str]]:
     """
@@ -174,9 +258,9 @@ def get_new_quests(quests_data: List[Dict[str, Any]]) -> Tuple[List[Dict[str, An
             new_quests.append(quest)
             seen_quests.add(quest_id)
     
-    # Save updated seen quests
+    # Save updated seen quests with datetime tracking
     if new_quests:
-        save_seen_quests(seen_quests)
+        save_seen_quests_with_datetime(seen_quests)
     
     return new_quests, seen_quests
 
@@ -547,10 +631,8 @@ def send_all_quests_webhook(webhook_url: Optional[str] = None, new_only: bool = 
     
     if new_only:
         # Get only new quests
-        new_quests, seen_quests = get_new_quests(sorted_quests)
+        new_quests, _ = get_new_quests(sorted_quests)
         quests_to_send = new_quests
-        logger.info(f"Found {len(sorted_quests)} total quests, {len(new_quests)} new quests")
-        logger.info(f"Previously seen: {len(seen_quests)} quests")
     else:
         quests_to_send = sorted_quests
         logger.info(f"Found {len(sorted_quests)} quests (sending all)")
@@ -694,8 +776,6 @@ def _build_discord_headers() -> Dict[str, str]:
         'accept': 'application/json',
         'accept-language': 'en-US',
         'x-discord-locale': 'en-US',
-        'cache-control': 'no-cache',
-        'pragma': 'no-cache',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) discord/1.0.9209 Chrome/134.0.6998.205 Electron/35.3.0 Safari/537.36',
         'x-super-properties': TOKEN_JWT,
     }
@@ -704,6 +784,10 @@ def main() -> None:
     """
     Main function to display quests information.
     """
+    logger.debug(f"Script directory: {SCRIPT_DIR}")
+    logger.debug(f"Current working directory: {os.getcwd()}")
+    logger.debug(f"Seen quests file path: {SEEN_QUESTS_FILE}")
+    
     quests = request_quests()
     
     # Check if we have quests data
@@ -715,6 +799,17 @@ def main() -> None:
     sorted_quests = sorted(quests["quests"], key=lambda quest: quest['config']['starts_at'], reverse=True)
 
     return sorted_quests
+
+def cleanup_old_quests() -> None:
+    """
+    Manually clean up quest entries older than 6 months (180 days).
+    """
+    try:
+        logger.info("Starting manual cleanup of old quest entries...")
+        seen_quests = load_seen_quests()  # This will automatically clean up old entries
+        logger.info(f"Cleanup completed. {len(seen_quests)} quest entries remain.")
+    except Exception as e:
+        logger.error(f"Error during cleanup: {str(e)}")
 
 def reset_seen_quests() -> None:
     """
@@ -731,15 +826,33 @@ def reset_seen_quests() -> None:
 
 def show_seen_quests() -> None:
     """
-    Display the list of seen quest IDs.
+    Display the list of seen quest IDs with datetime information.
     """
-    seen_quests = load_seen_quests()
-    if seen_quests:
-        logger.info(f"Previously seen quests ({len(seen_quests)}):")
-        for quest_id in sorted(seen_quests):
-            logger.info(f"  - {quest_id}")
-    else:
-        logger.info("No quests have been seen yet.")
+    try:
+        if os.path.exists(SEEN_QUESTS_FILE):
+            with open(SEEN_QUESTS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                
+                if 'quests' in data and isinstance(data['quests'], dict):
+                    # New format with datetime
+                    quests = data['quests']
+                    logger.info(f"Previously seen quests ({len(quests)}):")
+                    for quest_id, quest_data in sorted(quests.items()):
+                        seen_at = quest_data.get('seen_at', 'Unknown')
+                        logger.info(f"  - {quest_id} (seen: {seen_at})")
+                else:
+                    # Fallback to old format
+                    seen_quests = load_seen_quests()
+                    if seen_quests:
+                        logger.info(f"Previously seen quests ({len(seen_quests)}):")
+                        for quest_id in sorted(seen_quests):
+                            logger.info(f"  - {quest_id}")
+                    else:
+                        logger.info("No quests have been seen yet.")
+        else:
+            logger.info("No seen quests file found.")
+    except Exception as e:
+        logger.error(f"Error displaying seen quests: {str(e)}")
 
 def test_quest_button(quest_id: str, webhook_url: Optional[str] = None) -> None:
     """
