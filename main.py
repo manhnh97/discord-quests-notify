@@ -18,6 +18,17 @@ import pytz
 import requests
 from dotenv import load_dotenv
 
+# Import our SQLite database functions
+from seen_quests import (
+    add_seen_quest as db_add_seen_quest,
+    get_seen_quests as db_get_seen_quests,
+    get_seen_quests_with_datetime as db_get_seen_quests_with_datetime,
+    cleanup_old_quests as db_cleanup_old_quests,
+    reset_seen_quests as db_reset_seen_quests,
+    migrate_from_json as db_migrate_from_json,
+    sync_quests_with_api as db_sync_quests_with_api
+)
+
 # Load environment variables
 load_dotenv()
 
@@ -28,7 +39,8 @@ WEBHOOK_URL: str = os.getenv('WEBHOOK_URL', '')
 
 # File paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SEEN_QUESTS_FILE: str = os.path.join(SCRIPT_DIR, "seen_quests.json")
+SEEN_QUESTS_FILE: str = os.path.join(SCRIPT_DIR, "db", "seen_quests.db")
+SEEN_QUESTS_JSON_FILE: str = os.path.join(SCRIPT_DIR, "seen_quests.json")  # Keep for migration
 
 # API configuration
 DISCORD_API_BASE_URL: str = "https://discord.com/api/v10"
@@ -96,126 +108,50 @@ logger = setup_logging()
 
 def load_seen_quests() -> Set[str]:
     """
-    Load the list of seen quest IDs from file and clean up old entries.
+    Load the list of seen quest IDs from database.
     
     Returns:
-        Set[str]: Set of quest IDs that have been seen before (excluding old ones).
+        Set[str]: Set of quest IDs that have been seen before.
     """
     try:
-        logger.debug(f"Looking for seen quests file at: {SEEN_QUESTS_FILE}")
-        if os.path.exists(SEEN_QUESTS_FILE):
-            with open(SEEN_QUESTS_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                
-                # Handle different formats
-                if isinstance(data, list):
-                    # Old format: direct list of quest IDs
-                    logger.warning("Detected old format in seen_quests.json, migrating to new format")
-                    seen_quests = set(data)
-                    # Save in new format with current datetime
-                    save_seen_quests_with_datetime(seen_quests)
-                    return seen_quests
-                elif isinstance(data, dict):
-                    # New format: dictionary with quest data
-                    if 'seen_quests' in data and isinstance(data['seen_quests'], list):
-                        # Old new format: list of quest IDs
-                        logger.warning("Detected old new format, migrating to datetime format")
-                        seen_quests = set(data['seen_quests'])
-                        save_seen_quests_with_datetime(seen_quests)
-                        return seen_quests
-                    elif 'quests' in data:
-                        # New format: dictionary with quest data including datetime
-                        return _load_and_cleanup_quests(data)
-                    else:
-                        logger.error(f"Unexpected data format in {SEEN_QUESTS_FILE}")
-                        return set()
-                else:
-                    logger.error(f"Unexpected data format in {SEEN_QUESTS_FILE}")
-                    return set()
-        return set()
+        logger.debug(f"Loading seen quests from database at: {SEEN_QUESTS_FILE}")
+        
+        # Migrate from JSON if it exists and database is empty
+        if os.path.exists(SEEN_QUESTS_JSON_FILE) and not os.path.exists(SEEN_QUESTS_FILE):
+            logger.info("Migrating seen quests from JSON to SQLite database")
+            db_migrate_from_json(SEEN_QUESTS_JSON_FILE)
+        
+        # Get current seen quests
+        seen_quests = db_get_seen_quests()
+        logger.debug(f"Loaded {len(seen_quests)} seen quests from database")
+        return seen_quests
+        
     except Exception as e:
         logger.error(f"Error loading seen quests: {str(e)}")
         return set()
 
-def _load_and_cleanup_quests(data: Dict[str, Any]) -> Set[str]:
-    """
-    Load quests from new format and clean up old entries.
-    
-    Args:
-        data: Dictionary containing quest data.
-        
-    Returns:
-        Set of quest IDs that are not older than 6 months (180 days).
-    """
-    current_time = datetime.now()
-    cutoff_date = current_time - timedelta(days=180)
-    
-    quests = data.get('quests', {})
-    valid_quest_ids = set()
-    removed_count = 0
-    
-    for quest_id, quest_data in quests.items():
-        try:
-            # Parse the datetime string
-            seen_date = datetime.fromisoformat(quest_data['seen_at'].replace('Z', '+00:00'))
-            
-            # Check if quest is older than 6 months (180 days)
-            if seen_date < cutoff_date:
-                removed_count += 1
-                logger.debug(f"Removing old quest ID: {quest_id} (seen: {seen_date.isoformat()})")
-            else:
-                valid_quest_ids.add(quest_id)
-        except (KeyError, ValueError) as e:
-            logger.warning(f"Invalid quest data for ID {quest_id}: {str(e)}")
-            # Keep quest if we can't parse the date
-            valid_quest_ids.add(quest_id)
-    
-    if removed_count > 0:
-        logger.info(f"Cleaned up {removed_count} old quest entries (older than 6 months)")
-        # Save the cleaned data
-        _save_quests_with_datetime(valid_quest_ids, quests)
-    
-    return valid_quest_ids
+# This function is no longer needed as cleanup is handled by the database
 
-def _save_quests_with_datetime(quest_ids: Set[str], existing_quests: Optional[Dict[str, Any]] = None) -> None:
-    """
-    Save quest IDs with datetime tracking.
-    
-    Args:
-        quest_ids: Set of quest IDs to save.
-        existing_quests: Optional existing quest data to preserve.
-    """
-    try:
-        current_time = datetime.now()
-        quests_data = existing_quests or {}
-        
-        # Update or add new quest IDs with current datetime
-        for quest_id in quest_ids:
-            if quest_id not in quests_data:
-                quests_data[quest_id] = {
-                    'seen_at': current_time.isoformat(),
-                    'quest_id': quest_id
-                }
-        
-        data = {
-            'quests': quests_data,
-            'last_updated': current_time.isoformat()
-        }
-        
-        with open(SEEN_QUESTS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        logger.debug(f"Saved {len(quest_ids)} seen quests to file with datetime tracking")
-    except Exception as e:
-        logger.error(f"Error saving seen quests with datetime: {str(e)}")
+# This function is no longer needed as saving is handled by the database
 
 def save_seen_quests_with_datetime(seen_quests: Set[str]) -> None:
     """
-    Save the list of seen quest IDs to file with datetime tracking.
+    Save seen quests with datetime tracking to database.
     
     Args:
         seen_quests: Set of quest IDs to save.
     """
-    _save_quests_with_datetime(seen_quests)
+    try:
+        if not seen_quests:
+            return
+        
+        # Add each quest to the database
+        for quest_id in seen_quests:
+            db_add_seen_quest(quest_id)
+        
+        logger.debug(f"Saved {len(seen_quests)} seen quests to database")
+    except Exception as e:
+        logger.error(f"Error saving seen quests: {str(e)}")
 
 def save_seen_quests(seen_quests: Set[str]) -> None:
     """
@@ -228,18 +164,19 @@ def save_seen_quests(seen_quests: Set[str]) -> None:
 
 def add_seen_quest(quest_id: str, seen_quests: Set[str]) -> None:
     """
-    Add a quest ID to the seen quests set and save to file.
+    Add a quest ID to the seen quests set and save to database.
     
     Args:
         quest_id: The quest ID to add.
         seen_quests: The set of seen quest IDs to update.
     """
     seen_quests.add(quest_id)
-    save_seen_quests_with_datetime(seen_quests)
+    db_add_seen_quest(quest_id)
 
 def get_new_quests(quests_data: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Set[str]]:
     """
     Get only new quests that haven't been seen before.
+    Syncs database with current API response to remove quests no longer available.
     
     Args:
         quests_data: List of quest data from Discord API.
@@ -249,6 +186,13 @@ def get_new_quests(quests_data: List[Dict[str, Any]]) -> Tuple[List[Dict[str, An
             - List of new quests that haven't been seen
             - Set of all seen quest IDs (including newly added ones)
     """
+    # Extract current quest IDs from API response
+    current_quest_ids = {quest['config']['id'] for quest in quests_data}
+    
+    # Sync database with current API response
+    db_sync_quests_with_api(current_quest_ids)
+    
+    # Get seen quests after sync
     seen_quests = load_seen_quests()
     new_quests = []
     
@@ -257,10 +201,8 @@ def get_new_quests(quests_data: List[Dict[str, Any]]) -> Tuple[List[Dict[str, An
         if quest_id not in seen_quests:
             new_quests.append(quest)
             seen_quests.add(quest_id)
-    
-    # Save updated seen quests with datetime tracking
-    if new_quests:
-        save_seen_quests_with_datetime(seen_quests)
+            # Add to database immediately
+            db_add_seen_quest(quest_id)
     
     return new_quests, seen_quests
 
@@ -802,25 +744,37 @@ def main() -> None:
 
 def cleanup_old_quests() -> None:
     """
-    Manually clean up quest entries older than 6 months (180 days).
+    Manually sync quest entries with current API response.
+    Removes quests that are no longer available from the API.
     """
     try:
-        logger.info("Starting manual cleanup of old quest entries...")
-        seen_quests = load_seen_quests()  # This will automatically clean up old entries
-        logger.info(f"Cleanup completed. {len(seen_quests)} quest entries remain.")
+        logger.info("Starting manual sync with current API response...")
+        
+        # Get current quests from API
+        quests = request_quests()
+        if not quests or 'quests' not in quests or not quests['quests']:
+            logger.warning("No quests data available for sync")
+            return
+        
+        # Extract current quest IDs
+        current_quest_ids = {quest['config']['id'] for quest in quests['quests']}
+        
+        # Sync database with current API response
+        db_sync_quests_with_api(current_quest_ids)
+        
+        # Get final count
+        seen_quests = load_seen_quests()
+        logger.info(f"Sync completed. {len(seen_quests)} quest entries remain.")
     except Exception as e:
-        logger.error(f"Error during cleanup: {str(e)}")
+        logger.error(f"Error during sync: {str(e)}")
 
 def reset_seen_quests() -> None:
     """
-    Reset the seen quests list (mark all quests as new).
+    Reset the seen quests database (mark all quests as new).
     """
     try:
-        if os.path.exists(SEEN_QUESTS_FILE):
-            os.remove(SEEN_QUESTS_FILE)
-            logger.info("Seen quests list reset successfully!")
-        else:
-            logger.info("No seen quests file found to reset.")
+        db_reset_seen_quests()
+        logger.info("Seen quests database reset successfully!")
     except Exception as e:
         logger.error(f"Error resetting seen quests: {str(e)}")
 
@@ -829,28 +783,13 @@ def show_seen_quests() -> None:
     Display the list of seen quest IDs with datetime information.
     """
     try:
-        if os.path.exists(SEEN_QUESTS_FILE):
-            with open(SEEN_QUESTS_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                
-                if 'quests' in data and isinstance(data['quests'], dict):
-                    # New format with datetime
-                    quests = data['quests']
-                    logger.info(f"Previously seen quests ({len(quests)}):")
-                    for quest_id, quest_data in sorted(quests.items()):
-                        seen_at = quest_data.get('seen_at', 'Unknown')
-                        logger.info(f"  - {quest_id} (seen: {seen_at})")
-                else:
-                    # Fallback to old format
-                    seen_quests = load_seen_quests()
-                    if seen_quests:
-                        logger.info(f"Previously seen quests ({len(seen_quests)}):")
-                        for quest_id in sorted(seen_quests):
-                            logger.info(f"  - {quest_id}")
-                    else:
-                        logger.info("No quests have been seen yet.")
+        quests_with_datetime = db_get_seen_quests_with_datetime()
+        if quests_with_datetime:
+            logger.info(f"Previously seen quests ({len(quests_with_datetime)}):")
+            for quest_id, seen_at in quests_with_datetime:
+                logger.info(f"  - {quest_id} (seen: {seen_at})")
         else:
-            logger.info("No seen quests file found.")
+            logger.info("No quests have been seen yet.")
     except Exception as e:
         logger.error(f"Error displaying seen quests: {str(e)}")
 
