@@ -28,8 +28,8 @@ A comprehensive Python tool for fetching Discord quests and sending them as webh
 3. **Set up environment variables**:
    Create a `.env` file in the project root:
    ```env
-   DISCORD_AUTHORIZATION=your_discord_authorization_token
-   TOKEN_JWT=your_discord_jwt_token
+   DISCORD_AUTHORIZATION=your_discord_authorization_token_from_dev_console_api_@me
+   TOKEN_JWT=your_discord_jwt_token_from_dev_console_api_@me
    WEBHOOK_URL=your_discord_webhook_url
    ```
 
@@ -102,7 +102,7 @@ The application uses a sophisticated quest tracking system:
 ### SQLite Database
 - **Location**: `db/seen_quests.db`
 - **Schema**: Stores quest IDs with timestamps
-- **Automatic Migration**: Migrates from old JSON format automatically
+- **Primary Storage**: Database is the main storage system for quest tracking
 
 ### Smart Sync Algorithm
 1. **API Sync**: Compares current API response with database

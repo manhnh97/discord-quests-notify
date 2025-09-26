@@ -25,7 +25,6 @@ from seen_quests import (
     get_seen_quests_with_datetime as db_get_seen_quests_with_datetime,
     cleanup_old_quests as db_cleanup_old_quests,
     reset_seen_quests as db_reset_seen_quests,
-    migrate_from_json as db_migrate_from_json,
     sync_quests_with_api as db_sync_quests_with_api
 )
 
@@ -40,7 +39,6 @@ WEBHOOK_URL: str = os.getenv('WEBHOOK_URL', '')
 # File paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SEEN_QUESTS_FILE: str = os.path.join(SCRIPT_DIR, "db", "seen_quests.db")
-SEEN_QUESTS_JSON_FILE: str = os.path.join(SCRIPT_DIR, "seen_quests.json")  # Keep for migration
 
 # API configuration
 DISCORD_API_BASE_URL: str = "https://discord.com/api/v10"
@@ -116,11 +114,6 @@ def load_seen_quests() -> Set[str]:
     try:
         logger.debug(f"Loading seen quests from database at: {SEEN_QUESTS_FILE}")
         
-        # Migrate from JSON if it exists and database is empty
-        if os.path.exists(SEEN_QUESTS_JSON_FILE) and not os.path.exists(SEEN_QUESTS_FILE):
-            logger.info("Migrating seen quests from JSON to SQLite database")
-            db_migrate_from_json(SEEN_QUESTS_JSON_FILE)
-        
         # Get current seen quests
         seen_quests = db_get_seen_quests()
         logger.debug(f"Loaded {len(seen_quests)} seen quests from database")
@@ -130,9 +123,7 @@ def load_seen_quests() -> Set[str]:
         logger.error(f"Error loading seen quests: {str(e)}")
         return set()
 
-# This function is no longer needed as cleanup is handled by the database
-
-# This function is no longer needed as saving is handled by the database
+# Database-focused quest tracking system
 
 def save_seen_quests_with_datetime(seen_quests: Set[str]) -> None:
     """
@@ -724,11 +715,11 @@ def _build_discord_headers() -> Dict[str, str]:
 
 def main() -> None:
     """
-    Main function to display quests information.
+    Main function to fetch and process quests using database tracking.
     """
     logger.debug(f"Script directory: {SCRIPT_DIR}")
     logger.debug(f"Current working directory: {os.getcwd()}")
-    logger.debug(f"Seen quests file path: {SEEN_QUESTS_FILE}")
+    logger.debug(f"Database path: {SEEN_QUESTS_FILE}")
     
     quests = request_quests()
     

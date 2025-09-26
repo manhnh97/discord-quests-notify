@@ -68,33 +68,7 @@ def reset_seen_quests() -> None:
     finally:
         conn.close()
 
-def migrate_from_json(json_file_path: str) -> None:
-    """Migrate data from JSON file to SQLite database."""
-    import json
-    
-    if not os.path.exists(json_file_path):
-        return
-    
-    conn = get_connection()
-    try:
-        with open(json_file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        if 'quests' in data and isinstance(data['quests'], dict):
-            # New format with datetime
-            for quest_id, quest_data in data['quests'].items():
-                seen_at = quest_data.get('seen_at', datetime.now().isoformat())
-                conn.execute('INSERT OR REPLACE INTO seen_quests (quest_id, seen_at) VALUES (?, ?)', 
-                           (quest_id, seen_at))
-        elif isinstance(data, list):
-            # Old format: direct list of quest IDs
-            for quest_id in data:
-                conn.execute('INSERT OR REPLACE INTO seen_quests (quest_id, seen_at) VALUES (?, ?)', 
-                           (quest_id, datetime.now().isoformat()))
-        
-        conn.commit()
-    finally:
-        conn.close()
+# Migration function removed - database is now the primary storage
 
 def sync_quests_with_api(current_quest_ids: Set[str]) -> None:
     """
