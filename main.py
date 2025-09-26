@@ -35,13 +35,14 @@ load_dotenv()
 DISCORD_AUTHORIZATION: str = os.getenv('DISCORD_AUTHORIZATION', '')
 TOKEN_JWT: str = os.getenv('TOKEN_JWT', '')
 WEBHOOK_URL: str = os.getenv('WEBHOOK_URL', '')
+WEBHOOK_URL_ALERT: str = os.getenv('WEBHOOK_URL_ALERT', '')
 
 # File paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SEEN_QUESTS_FILE: str = os.path.join(SCRIPT_DIR, "db", "seen_quests.db")
 
 # API configuration
-DISCORD_API_BASE_URL: str = "https://discord.com/api/v10"
+DISCORD_API_BASE_URL: str = "https://discord.com/api/v9"
 QUESTS_ENDPOINT: str = f"{DISCORD_API_BASE_URL}/quests/@me"
 QUEST_PAGE_BASE_URL: str = "https://discord.com/quests"
 
@@ -103,6 +104,59 @@ def setup_logging() -> logging.Logger:
 
 # Initialize logger
 logger = setup_logging()
+
+class DiscordWebhookAlertHandler(logging.Handler):
+    """
+    Logging handler that forwards ERROR+ logs to a Discord webhook.
+    Uses WEBHOOK_URL_ALERT, falling back to WEBHOOK_URL.
+    """
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            target_webhook = WEBHOOK_URL_ALERT or WEBHOOK_URL
+            if not target_webhook:
+                return
+            message = self.format(record)
+            requests.post(target_webhook, json={"content": f"🚨 {message}"})
+        except Exception:
+            # Never raise from logging
+            pass
+
+# Attach alert handler for error monitoring if a webhook is configured
+if WEBHOOK_URL_ALERT or WEBHOOK_URL:
+    _alert_handler = DiscordWebhookAlertHandler()
+    _alert_handler.setLevel(logging.ERROR)
+    _alert_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+    logger.addHandler(_alert_handler)
+
+def _send_alert(message: str) -> None:
+    """
+    Send a plain text alert message to the configured Discord webhook.
+
+    Args:
+        message: The message content to send.
+    """
+    try:
+        target_webhook = WEBHOOK_URL_ALERT or WEBHOOK_URL
+        if not target_webhook:
+            logger.warning(f"Alert not sent (missing WEBHOOK_URL_ALERT/WEBHOOK_URL): {message}")
+            return
+        requests.post(target_webhook, json={"content": message})
+    except Exception as e:
+        logger.error(f"Failed to send alert webhook: {str(e)}")
+
+def _preflight_check_tokens() -> None:
+    """
+    Validate that required tokens are present; alert if missing.
+    """
+    issues = []
+    if not DISCORD_AUTHORIZATION:
+        issues.append("DISCORD_AUTHORIZATION is empty")
+    if not TOKEN_JWT:
+        issues.append("TOKEN_JWT is empty")
+    if issues:
+        msg = "⚠️ Token misconfiguration detected: " + "; ".join(issues) + ". Please update your .env."
+        logger.error(msg)
+        _send_alert(msg)
 
 def load_seen_quests() -> Set[str]:
     """
@@ -672,6 +726,16 @@ def request_quests() -> Dict[str, Any]:
     try:
         logger.info("Fetching quests from Discord API")
         response = requests.get(QUESTS_ENDPOINT, headers=headers)
+        if response.status_code in (401, 403):
+            # Unauthorized or Forbidden -> likely expired/invalid tokens
+            problem = "expired" if (DISCORD_AUTHORIZATION or TOKEN_JWT) else "missing"
+            alert = (
+                f"❌ Discord API auth error ({response.status_code}). Tokens may be {problem}.\n"
+                f"Please refresh DISCORD_AUTHORIZATION and TOKEN_JWT in .env."
+            )
+            logger.error(alert)
+            _send_alert(alert)
+            return {'quests': []}
         response.raise_for_status()
         
         data = response.json()
@@ -690,7 +754,17 @@ def request_quests() -> Dict[str, Any]:
         return data
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"Request failed: {str(e)}")
+        # Detect common auth-related errors in the exception message
+        msg = str(e)
+        if any(code in msg for code in ["401", "403", "Unauthorized", "Forbidden"]):
+            alert = (
+                "❌ Discord API request failed due to authentication (401/403). "
+                "Please refresh DISCORD_AUTHORIZATION and TOKEN_JWT."
+            )
+            logger.error(alert)
+            _send_alert(alert)
+        else:
+            logger.error(f"Request failed: {msg}")
         return {'quests': []}
     except Exception as e:
         logger.error(f"Error parsing response: {str(e)}")
@@ -720,6 +794,7 @@ def main() -> None:
     logger.debug(f"Script directory: {SCRIPT_DIR}")
     logger.debug(f"Current working directory: {os.getcwd()}")
     logger.debug(f"Database path: {SEEN_QUESTS_FILE}")
+    _preflight_check_tokens()
     
     quests = request_quests()
     
