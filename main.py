@@ -105,6 +105,17 @@ def setup_logging() -> logging.Logger:
 # Initialize logger
 logger = setup_logging()
 
+def _parse_webhook_urls(raw_urls: str) -> List[str]:
+    """
+    Parse a comma- or semicolon-separated list of webhook URLs.
+    Whitespace is trimmed and empty entries are removed.
+    """
+    if not raw_urls:
+        return []
+    # Accept commas or semicolons as separators
+    normalized = raw_urls.replace(';', ',')
+    return [u.strip() for u in normalized.split(',') if u.strip()]
+
 class DiscordWebhookAlertHandler(logging.Handler):
     """
     Logging handler that forwards ERROR+ logs to a Discord webhook.
@@ -112,11 +123,12 @@ class DiscordWebhookAlertHandler(logging.Handler):
     """
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            target_webhook = WEBHOOK_URL_ALERT or WEBHOOK_URL
-            if not target_webhook:
+            targets = _parse_webhook_urls(WEBHOOK_URL_ALERT) or _parse_webhook_urls(WEBHOOK_URL)
+            if not targets:
                 return
             message = self.format(record)
-            requests.post(target_webhook, json={"content": f"🚨 {message}"})
+            for target in targets:
+                requests.post(target, json={"content": f"🚨 {message}"})
         except Exception:
             # Never raise from logging
             pass
@@ -136,11 +148,12 @@ def _send_alert(message: str) -> None:
         message: The message content to send.
     """
     try:
-        target_webhook = WEBHOOK_URL_ALERT or WEBHOOK_URL
-        if not target_webhook:
+        targets = _parse_webhook_urls(WEBHOOK_URL_ALERT) or _parse_webhook_urls(WEBHOOK_URL)
+        if not targets:
             logger.warning(f"Alert not sent (missing WEBHOOK_URL_ALERT/WEBHOOK_URL): {message}")
             return
-        requests.post(target_webhook, json={"content": message})
+        for target in targets:
+            requests.post(target, json={"content": message})
     except Exception as e:
         logger.error(f"Failed to send alert webhook: {str(e)}")
 
@@ -234,13 +247,11 @@ def get_new_quests(quests_data: List[Dict[str, Any]]) -> Tuple[List[Dict[str, An
     # Extract current quest IDs from API response
     current_quest_ids = {quest['config']['id'] for quest in quests_data}
     
-    # Sync database with current API response
-    db_sync_quests_with_api(current_quest_ids)
-    
-    # Get seen quests after sync
+    # Get seen quests BEFORE syncing to properly detect new quests
     seen_quests = load_seen_quests()
     new_quests = []
     
+    # Check for new quests first
     for quest in quests_data:
         quest_id = quest['config']['id']
         if quest_id not in seen_quests:
@@ -248,6 +259,9 @@ def get_new_quests(quests_data: List[Dict[str, Any]]) -> Tuple[List[Dict[str, An
             seen_quests.add(quest_id)
             # Add to database immediately
             db_add_seen_quest(quest_id)
+    
+    # Sync database with current API response AFTER detecting new quests
+    db_sync_quests_with_api(current_quest_ids)
     
     return new_quests, seen_quests
 
@@ -599,9 +613,11 @@ def send_all_quests_webhook(webhook_url: Optional[str] = None, new_only: bool = 
         new_only: If True, only send new quests. If False, send all quests.
     """
     if not webhook_url:
-        webhook_url = WEBHOOK_URL
-    
-    if not webhook_url:
+        # If not provided, use the list from env
+        urls = _parse_webhook_urls(WEBHOOK_URL)
+    else:
+        urls = [webhook_url]
+    if not urls:
         logger.error("No webhook URL provided. Set WEBHOOK_URL in .env file or pass as parameter.")
         return
     
@@ -628,8 +644,9 @@ def send_all_quests_webhook(webhook_url: Optional[str] = None, new_only: bool = 
         logger.info("No new quests to send!")
         return
     
-    logger.info(f"Sending webhooks to: {webhook_url[:50]}...")
-    _send_quests_batch(webhook_url, quests_to_send)
+    for url in urls:
+        logger.info(f"Sending webhooks to: {url[:50]}...")
+        _send_quests_batch(url, quests_to_send)
 
 def _send_quests_batch(webhook_url: str, quests: List[Dict[str, Any]]) -> None:
     """
