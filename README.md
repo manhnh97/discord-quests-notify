@@ -11,6 +11,8 @@ A comprehensive Python tool for fetching Discord quests and sending them as webh
 - ⚡ **Rate Limiting**: Built-in rate limiting to respect Discord API limits
 - 🗄️ **SQLite Database**: Uses SQLite for efficient quest tracking and persistence
 - 🔧 **Flexible Configuration**: Environment-based configuration for easy deployment
+- 🚨 **Alert System**: Built-in Discord webhook alerts for error monitoring and system notifications
+- 🔍 **Quest Detection**: Fixed logic to properly detect new quests even after database modifications
 
 ## Installation
 
@@ -31,6 +33,7 @@ A comprehensive Python tool for fetching Discord quests and sending them as webh
    DISCORD_AUTHORIZATION=your_discord_authorization_token_from_dev_console_api_@me
    TOKEN_JWT=your_discord_jwt_token_from_dev_console_api_@me
    WEBHOOK_URL=your_discord_webhook_url
+   WEBHOOK_URL_ALERT=your_alert_webhook_url_for_errors
    ```
 
 ## Configuration
@@ -42,6 +45,7 @@ A comprehensive Python tool for fetching Discord quests and sending them as webh
 | `DISCORD_AUTHORIZATION` | Discord authorization token for API access | Yes |
 | `TOKEN_JWT` | Discord JWT token for API requests | Yes |
 | `WEBHOOK_URL` | Discord webhook URL for sending notifications | Yes |
+| `WEBHOOK_URL_ALERT` | Discord webhook URL for error alerts (optional) | No |
 
 ### Getting Discord Tokens
 
@@ -105,14 +109,15 @@ The application uses a sophisticated quest tracking system:
 - **Primary Storage**: Database is the main storage system for quest tracking
 
 ### Smart Sync Algorithm
-1. **API Sync**: Compares current API response with database
-2. **Remove Obsolete**: Automatically removes quests no longer available
-3. **Add New**: Tracks new quests from API response
-4. **Duplicate Prevention**: Only sends notifications for truly new quests
+1. **Load Current State**: Loads existing quest IDs from database
+2. **Detect New Quests**: Compares API response with current database state
+3. **Add New Quests**: Immediately adds newly detected quests to database
+4. **Sync Database**: Removes quests no longer available in API response
+5. **Duplicate Prevention**: Only sends notifications for truly new quests
 
 ### Quest Lifecycle
 ```
-API Response → Extract Quest IDs → Sync Database → Identify New Quests → Send Notifications
+API Response → Load Database State → Detect New Quests → Add to Database → Sync Database → Send Notifications
 ```
 
 ## Discord Embed Features
@@ -202,12 +207,24 @@ CMD ["python", "main.py"]
    - Verify SQLite database is not corrupted
    - Check disk space availability
 
+4. **Quest Detection Issues**
+   - If quests aren't detected as new after database changes, the sync logic has been fixed
+   - The system now properly detects new quests even after manual database modifications
+   - Use `cleanup_old_quests()` to sync with current API state
+
 ### Debug Mode
 Enable debug logging by modifying the logging level in `main.py`:
 
 ```python
 logger.setLevel(logging.DEBUG)
 ```
+
+### Alert System
+The system includes a built-in alert system that sends error notifications to Discord:
+- **Error Monitoring**: Automatically sends ERROR+ level logs to configured webhook
+- **Token Validation**: Alerts when Discord tokens are missing or invalid
+- **API Failures**: Notifies about authentication and API request failures
+- **Fallback Support**: Uses `WEBHOOK_URL` if `WEBHOOK_URL_ALERT` is not configured
 
 ## Contributing
 
@@ -220,6 +237,20 @@ logger.setLevel(logging.DEBUG)
 ## License
 
 This project is open source. Please check the license file for details.
+
+## Recent Updates
+
+### v1.1.0 - Quest Detection Fix
+- **Fixed Quest Detection Logic**: Resolved issue where quests weren't detected as new after database modifications
+- **Improved Sync Algorithm**: Reordered operations to properly detect new quests before database sync
+- **Enhanced Error Handling**: Added comprehensive error monitoring and Discord alert system
+- **Better Logging**: Improved logging with detailed quest tracking information
+
+### Key Improvements
+- Quest detection now works correctly when manually deleting records from database
+- Alert system provides real-time error notifications via Discord webhooks
+- More robust error handling for API failures and token issues
+- Better documentation and troubleshooting guides
 
 ## Support
 
