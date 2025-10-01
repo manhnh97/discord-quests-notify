@@ -923,9 +923,6 @@ def test_quest_button(quest_id: str, webhook_url: Optional[str] = None) -> None:
 
 if __name__ == "__main__":
     try:
-        # Run the original main function
-        main()
-        
         # Show seen quests info
         # show_seen_quests()
         

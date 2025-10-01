@@ -3,8 +3,12 @@ import time
 import os
 from typing import Set, List, Tuple
 from datetime import datetime, timedelta
+import logging
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'db', 'seen_quests.db')
+
+# Use the same logger name as the main module to share handlers/formatting
+logger = logging.getLogger('discord_quests')
 
 def get_connection():
     """Get a database connection."""
@@ -93,7 +97,7 @@ def sync_quests_with_api(current_quest_ids: Set[str]) -> None:
             conn.execute(f'DELETE FROM seen_quests WHERE quest_id IN ({placeholders})', 
                         list(quests_to_remove))
             conn.commit()
-            print(f"Removed {len(quests_to_remove)} quest IDs that are no longer in API")
+            logger.info(f"Removed {len(quests_to_remove)} quest IDs that are no longer in API")
         
         # Add new quest IDs from API (if any)
         new_quest_ids = current_quest_ids - db_quest_ids
@@ -103,7 +107,7 @@ def sync_quests_with_api(current_quest_ids: Set[str]) -> None:
         
         if new_quest_ids:
             conn.commit()
-            print(f"Added {len(new_quest_ids)} new quest IDs from API")
+            logger.info(f"Added {len(new_quest_ids)} new quest IDs from API")
             
     finally:
         conn.close()
