@@ -9,11 +9,11 @@ Features include quest tracking, duplicate prevention, and beautiful Discord emb
 import os
 import json
 import logging
+import random
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple, Any
 
-import discord
 import pytz
 import requests
 from dotenv import load_dotenv
@@ -47,14 +47,29 @@ QUESTS_ENDPOINT: str = f"{DISCORD_API_BASE_URL}/quests/@me"
 QUEST_PAGE_BASE_URL: str = "https://discord.com/quests"
 
 # Image dimensions
-HERO_IMAGE_WIDTH: int = 1320
-HERO_IMAGE_HEIGHT: int = 350
+IMAGE_WIDTH: int = 1320
+IMAGE_HEIGHT: int = 350
 THUMBNAIL_WIDTH: int = 300
 THUMBNAIL_HEIGHT: int = 300
 
 # Discord embed colors
 EMBED_COLOR: int = 0x00b0f4
 TEST_EMBED_COLOR: int = 0x00ff00
+
+def get_random_embed_color() -> int:
+    """
+    Generate a random color for Discord embeds.
+    
+    Returns:
+        Random color as integer (0xRRGGBB format).
+    """
+    # Generate random RGB values
+    r = random.randint(0, 255)
+    g = random.randint(0, 255)
+    b = random.randint(0, 255)
+    
+    # Convert to hex format
+    return (r << 16) | (g << 8) | b
 
 # Rate limiting
 WEBHOOK_DELAY_SECONDS: float = 1.0
@@ -378,15 +393,15 @@ def get_quest_rewards(data_config: Dict[str, Any]) -> List[str]:
     data_config_rewards = data_config['rewards_config']['rewards']
     return [reward['messages']['name'] for reward in data_config_rewards]
 
-def get_quest_rewards_asset_image_url(data_config: Dict[str, Any]) -> Optional[str]:
+def get_quest_thumbnail_image_url(data_config: Dict[str, Any]) -> Optional[str]:
     """
-    Extract quest rewards asset image URL from quest configuration.
+    Extract quest thumbnail image URL from quest configuration.
     
     Args:
         data_config: Quest configuration data.
         
     Returns:
-        Asset image URL if available, None otherwise.
+        Thumbnail image URL if available, None otherwise.
     """
     rewards = data_config['rewards_config']['rewards']
     if not rewards:
@@ -394,19 +409,19 @@ def get_quest_rewards_asset_image_url(data_config: Dict[str, Any]) -> Optional[s
     
     return rewards[0].get("asset")
 
-def get_quest_hero_image_url(data_config: Dict[str, Any]) -> str:
-    """Extract quest hero image URL from quest configuration."""
+def get_quest_image_url(data_config: Dict[str, Any]) -> str:
+    """Extract quest image URL from quest configuration."""
     return data_config['assets']['hero']
 
-def create_quest_embed(quest_data: Dict[str, Any]) -> discord.Embed:
+def create_quest_embed(quest_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Create a Discord embed for a quest.
+    Create a Discord embed for a quest in the new format.
     
     Args:
         quest_data: Quest data from Discord API.
         
     Returns:
-        Formatted Discord embed object.
+        Formatted Discord embed dictionary.
     """
     data_config = quest_data['config']
     
@@ -419,71 +434,87 @@ def create_quest_embed(quest_data: Dict[str, Any]) -> discord.Embed:
     quest_end_date = get_quest_end_date(data_config)
     quest_tasks = get_quest_tasks(data_config)
     quest_rewards = get_quest_rewards(data_config)
-    quest_hero_image_url = get_quest_hero_image_url(data_config)
-    quest_rewards_asset_image_url = get_quest_rewards_asset_image_url(data_config)
+    quest_image_url = get_quest_image_url(data_config)
+    quest_thumbnail_image_url = get_quest_thumbnail_image_url(data_config)
     
-    # Create the embed
-    embed = discord.Embed(
-        title=f"Game: {quest_game_title}",
-        colour=EMBED_COLOR,
-        timestamp=datetime.now()
-    )
+    # Build image URLs
+    image_url = None
+    thumbnail_url = None
     
-    embed.set_author(name="🎉 New Quest Available! 🎉")
+    if quest_image_url:
+        image_url = _build_image_url(quest_id, quest_image_url, IMAGE_WIDTH, IMAGE_HEIGHT)
     
-    # Add quest information fields
-    embed.add_field(
-        name=f"🎯 {quest_name}\n",
-        value=f"Publisher: {quest_game_publisher}\n",
-        inline=False
-    )
-    embed.add_field(
-        name=f"📆 Starts \n",
-        value=quest_start_date,
-        inline=True
-    )
-    embed.add_field(
-        name="🗓️ Expires \n",
-        value=quest_end_date,
-        inline=True
-    )
-    
-    # Add tasks if available
-    if quest_tasks:
-        embed.add_field(
-            name="📝 Tasks \n",
-            value="\n\t".join(quest_tasks),
-            inline=False
-        )
-    
-    # Add rewards if available
-    if quest_rewards:
-        embed.add_field(
-            name="🎁 Rewards \n",
-            value="\n\t".join(quest_rewards),
-            inline=False
-        )
-    
-    # Set hero image if available
-    if quest_hero_image_url:
-        hero_image_url = _build_image_url(quest_id, quest_hero_image_url, HERO_IMAGE_WIDTH, HERO_IMAGE_HEIGHT)
-        embed.set_image(url=hero_image_url)
-    
-    # Set thumbnail image
-    if quest_rewards_asset_image_url:
-        thumbnail_url = _build_image_url(quest_id, quest_rewards_asset_image_url, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
+    if quest_thumbnail_image_url:
+        thumbnail_url = _build_image_url(quest_id, quest_thumbnail_image_url, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
     else:
         # Default thumbnail
         thumbnail_url = f"https://cdn.discordapp.com/assets/content/fb761d9c206f93cd8c4e7301798abe3f623039a4054f2e7accd019e1bb059fc8.webm?format=webp&width={THUMBNAIL_WIDTH}&height={THUMBNAIL_HEIGHT}"
     
-    embed.set_thumbnail(url=thumbnail_url)
+    # Create the embed in new format
+    embed = {
+        "id": 824735312,
+        "description": (f"Name: **{quest_name}**\n"
+                        f"Publisher: **{quest_game_publisher}**"),
+        "fields": [
+            {
+                "id": 714402766,
+                "name": "📆 Starts",
+                "value": quest_start_date,
+                "inline": True
+            },
+            {
+                "id": 779733495,
+                "name": "🗓️ Expires",
+                "value": quest_end_date,
+                "inline": True
+            }
+        ],
+        "title": quest_game_title,
+        "url": f"{QUEST_PAGE_BASE_URL}/{quest_id}",
+        "color": get_random_embed_color(),
+        "footer": {
+            "text": f"ID: {quest_id}"
+        },
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    # Add thumbnail if available
+    if thumbnail_url:
+        embed["thumbnail"] = {
+            "url": thumbnail_url
+        }
+    
+    # Add image if available
+    if image_url:
+        embed["image"] = {
+            "url": image_url
+        }
+    
+    # Add tasks if available
+    if quest_tasks:
+        embed["fields"].append({
+            "id": 982926433,
+            "name": "📝 Tasks",
+            "value": "\n\t".join(quest_tasks),
+            "inline": False
+        })
+    
+    # Add rewards if available
+    if quest_rewards:
+        embed["fields"].append({
+            "id": 642050575,
+            "name": "🎁 Rewards",
+            "value": "\n\t".join(quest_rewards),
+            "inline": False
+        })
     
     # Add quest link field
-    quest_url = f"{QUEST_PAGE_BASE_URL}/{quest_id}"
-    embed.add_field(name="🔍 View Quest", value=f"[Click here to view quest]({quest_url})", inline=False)
-    
-    # Set footer with quest ID
-    embed.set_footer(text=f"ID: {quest_id}")
+    embed["fields"].append({
+        "id": 192090086,
+        "name": "🔍 View Quest",
+        "value": f"[Click here to view quest]({QUEST_PAGE_BASE_URL}/{quest_id})",
+        "inline": False
+    })
     
     return embed
 
@@ -502,12 +533,12 @@ def _build_image_url(quest_id: str, image_path: str, width: int, height: int) ->
     """
     return f"https://cdn.discordapp.com/quests/{quest_id}/{image_path}?format=webp&width={width}&height={height}"
 
-def get_all_quest_embeds() -> List[discord.Embed]:
+def get_all_quest_embeds() -> List[Dict[str, Any]]:
     """
-    Get all quests and return them as Discord embeds.
+    Get all quests and return them as Discord embeds in the new format.
     
     Returns:
-        List of Discord embed objects for all quests.
+        List of Discord embed dictionaries for all quests.
     """
     logger.info("Fetching Discord quests for embed generation")
     data = request_quests()
@@ -523,86 +554,30 @@ def get_all_quest_embeds() -> List[discord.Embed]:
     logger.info(f"Generated {len(sorted_quests)} quest embeds")
     return [create_quest_embed(quest) for quest in sorted_quests]
 
-def send_webhook(webhook_url: str, embed: discord.Embed, quest_id: Optional[str] = None) -> requests.Response:
+def send_discord_message(webhook_url: str, content: str, embed: Dict[str, Any]) -> requests.Response:
     """
-    Send a Discord webhook with an embed and optional quest button.
+    Send a Discord webhook with an embed in the new format.
     
     Args:
         webhook_url: Discord webhook URL.
-        embed: Discord embed object to send.
-        quest_id: Optional quest ID for the quest button.
+        content: Message content.
+        embed: Discord embed dictionary to send.
         
     Returns:
         HTTP response from Discord API.
     """
     webhook_data = {
-        "embeds": [embed.to_dict()]
+        "content": content,
+        "tts": False,
+        "embeds": [embed],
+        "components": [],
+        "actions": {},
+        "flags": 0
     }
-    
-    # Note: Discord webhooks may not support components properly
-    # The quest link is already in the embed field
     
     return requests.post(webhook_url, json=webhook_data)
 
-def create_view_quest_button(quest_url: str) -> Dict[str, Any]:
-    """
-    Create a View Quest button (equivalent to Discord.js ButtonBuilder).
-    
-    Args:
-        quest_url: The quest URL to link to.
-        
-    Returns:
-        Button component dictionary for Discord webhook API.
-    """
-    return {
-        "type": 2,  # Button
-        "style": 5,  # Link button (ButtonStyle.Link equivalent)
-        "label": "View Quest",
-        "url": quest_url
-    }
 
-def test_button_webhook(webhook_url: Optional[str] = None) -> None:
-    """
-    Test button functionality with a simple webhook.
-    
-    Args:
-        webhook_url: Discord webhook URL. Uses WEBHOOK_URL from env if not provided.
-    """
-    if not webhook_url:
-        webhook_url = WEBHOOK_URL
-    
-    if not webhook_url:
-        logger.error("No webhook URL provided. Set WEBHOOK_URL in .env file or pass as parameter.")
-        return
-    
-    logger.info("Testing button webhook...")
-    
-    # Test 1: Simple message with button
-    test_url = "https://discord.com/quests/1408500501397639360"
-    button = create_view_quest_button(test_url)
-    
-    webhook_data = {
-        "content": "🧪 **Button Test** - Click the button below:",
-        "components": [{
-            "type": 1,  # Action Row
-            "components": [button]
-        }]
-    }
-    
-    logger.debug(f"Button test data: {json.dumps(webhook_data, indent=2)}")
-    
-    try:
-        response = requests.post(webhook_url, json=webhook_data)
-        logger.info(f"Button test response status: {response.status_code}")
-        
-        if response.status_code == 204:
-            logger.info("✅ Button test sent successfully!")
-        else:
-            logger.error(f"❌ Button test failed. Status: {response.status_code}")
-            logger.debug(f"Response: {response.text}")
-            
-    except Exception as e:
-        logger.error(f"❌ Error sending button test: {str(e)}")
 
 def send_all_quests_webhook(webhook_url: Optional[str] = None, new_only: bool = True) -> None:
     """
@@ -661,12 +636,13 @@ def _send_quests_batch(webhook_url: str, quests: List[Dict[str, Any]]) -> None:
     
     for i, quest in enumerate(quests, 1):
         try:
+            content = f"🎉 New Quest Available! 🎉"
             embed = create_quest_embed(quest)
             quest_id = get_quest_id(quest['config'])
             quest_name = get_quest_name(quest['config'])
             
-            response = send_webhook(webhook_url, embed, quest_id)
-            
+            response = send_discord_message(webhook_url, content, embed)
+
             if response.status_code == 204:
                 successful_sends += 1
                 logger.info(f"Quest #{i} sent successfully: {quest_name} (ID: {quest_id})")
@@ -719,7 +695,8 @@ def send_single_quest_webhook(quest_id: str, webhook_url: Optional[str] = None) 
     
     try:
         embed = create_quest_embed(quest)
-        response = send_webhook(webhook_url, embed, quest_id)
+        content = f"🎉 New Quest Available! 🎉"
+        response = send_discord_message(webhook_url, content, embed)
         
         if response.status_code == 204:
             quest_name = get_quest_name(quest['config'])
@@ -876,49 +853,6 @@ def show_seen_quests() -> None:
     except Exception as e:
         logger.error(f"Error displaying seen quests: {str(e)}")
 
-def test_quest_button(quest_id: str, webhook_url: Optional[str] = None) -> None:
-    """
-    Test sending a quest with a button.
-    
-    Args:
-        quest_id: Quest ID to test with.
-        webhook_url: Discord webhook URL. Uses WEBHOOK_URL from env if not provided.
-    """
-    if not webhook_url:
-        webhook_url = WEBHOOK_URL
-    
-    if not webhook_url:
-        logger.error("No webhook URL provided. Set WEBHOOK_URL in .env file or pass as parameter.")
-        return
-    
-    logger.info(f"Testing quest button for ID: {quest_id}")
-    logger.info(f"Quest URL: {QUEST_PAGE_BASE_URL}/{quest_id}")
-    
-    # Create a test embed
-    embed = discord.Embed(
-        title="🧪 Test Quest Button",
-        description=f"Testing button for quest ID: `{quest_id}`",
-        colour=TEST_EMBED_COLOR,
-        timestamp=datetime.now()
-    )
-    
-    embed.add_field(
-        name="🎮 Quest Link",
-        value="Click the button below to view the quest!",
-        inline=False
-    )
-    
-    try:
-        response = send_webhook(webhook_url, embed, quest_id)
-        
-        if response.status_code == 204:
-            logger.info("Test quest with button sent successfully!")
-        else:
-            logger.error(f"Test quest failed to send. Status: {response.status_code}")
-            logger.debug(f"Response: {response.text}")
-            
-    except Exception as e:
-        logger.error(f"Error sending test quest: {str(e)}")
 
 
 if __name__ == "__main__":
